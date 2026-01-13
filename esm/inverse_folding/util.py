@@ -23,6 +23,49 @@ from typing import Sequence, Tuple, List
 
 from esm.data import BatchConverter
 
+# Added by Jiaqi: mapping of non-standard residue names to standard ones for 3->1 conversion
+NONSTD_TO_STD = {
+    "SEP": "SER",  # phospho-Ser
+    "TPO": "THR",  # phospho-Thr
+    "PTR": "TYR",  # phospho-Tyr (you mentioned earlier)
+    "MLY": "LYS",  # methyl-Lys
+    "M3L": "LYS",  # trimethyl-Lys
+    "LLP": "LYS",  # lysine adduct
+    "CMT": "CYS",  # modified Cys
+    "CGU": "GLU",  # gamma-carboxy-Glu
+    "IAS": "CYS",  # iodoacetamide-Cys
+    "HIC": "HIS",  # modified His
+    "F2F": "PHE",  # Phe stereoisomer
+    "PCA": "GLN",  # pyroglutamate often from Gln; could also be GLU
+    "MSE": "MET",  # common in PDBs
+}
+
+# Added by Jiaqi: conservative whitelist of standard amino acids for sanity check after remapping
+def sanitize_resnames(atom_array, mapping=NONSTD_TO_STD, unknown="UNK"):
+    """
+    Replace non-standard residue names in a biotite AtomArray so
+    downstream 3->1 mapping won't KeyError.
+    """
+    # atom_array.res_name is a (n_atoms,) array of strings
+    res = atom_array.res_name.copy()
+    # vectorized remap
+    for k, v in mapping.items():
+        res[res == k] = v
+
+    # If there are still unknown residue names, set to UNK (-> 'X')
+    # This prevents any remaining KeyError.
+    # (You can skip this if you want to crash on truly unknown residues.)
+    # Build a conservative whitelist of standard amino acids
+    std3 = {
+        "ALA","ARG","ASN","ASP","CYS","GLN","GLU","GLY","HIS","ILE",
+        "LEU","LYS","MET","PHE","PRO","SER","THR","TRP","TYR","VAL",
+        "UNK"
+    }
+    mask_unknown = ~np.isin(res, list(std3))
+    res[mask_unknown] = unknown
+
+    atom_array.res_name = res
+    return atom_array
 
 def load_structure(fpath, chain=None):
     """
@@ -56,6 +99,10 @@ def load_structure(fpath, chain=None):
             raise ValueError(f'Chain {chain} not found in input file')
     chain_filter = [a.chain_id in chain_ids for a in structure]
     structure = structure[chain_filter]
+
+    # Added by Jiaqi: sanitize residue names to prevent downstream KeyError in 3->1 mapping
+    structure = sanitize_resnames(structure)
+    
     return structure
 
 
