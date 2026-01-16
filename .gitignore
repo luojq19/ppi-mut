@@ -180,3 +180,4 @@ data_cleaned/
 checkpoints/
 *.zip
 jupyters
+scripts/run.sh
