@@ -60,10 +60,55 @@ def get_logits(model, alphabet, coords, seq):
 
     return logits
 
+def naive_score(model, alphabet, fpath, chain_ids, mut, logger):
+    structure = esm.inverse_folding.util.load_structure(fpath, chain_ids)
+    coords, native_seqs = esm.inverse_folding.multichain_util.extract_coords_from_complex(structure)
+    concat_coords, ranges = concatenate_coords(coords)
+    concat_seq = concatenate_seqs(native_seqs, alphabet, ranges)
+    logits = get_logits(model, alphabet, concat_coords, concat_seq)
+    # logger.info(f'{pdb} logits shape: {logits.shape}') # [1, 35, 347], batch_size x vocab_size x seq_len
+    logits = logits.permute(0, 2, 1) # [1, seq_len, vocab_size]
+    log_probs = F.log_softmax(logits, dim=-1) # [1, seq_len, vocab_size]
+    log_probs = log_probs.squeeze(0) # [seq_len, vocab_size]
+    # logger.info(f'{pdb} log_probs shape: {log_probs.shape}') # [seq_len, vocab_size]
+    # logger.info(ranges)
+    # logger.info(mut)
+    score = 0.0
+    for mut_str in mut:
+        wt_res = mut_str[0]
+        chain_id = mut_str[1]
+        res_id = int(mut_str[2:-1]) - 1 # convert to 0-based index
+        mut_res = mut_str[-1]
+        if chain_id not in ranges:
+            # logger.warning(f'Chain {chain_id} not found in {fpath} and chain_ids {chain_ids}, skipping mutation {mut_str}')
+            continue
+        start, end = ranges[chain_id]
+        res_pos = start + res_id
+        if res_pos < start or res_pos >= end:
+            logger.warning(f'Residue position {res_id} out of range for chain {chain_id} in {fpath}, skipping mutation {mut_str}')
+            continue
+        wt_token_id = alphabet.get_idx(wt_res)
+        mut_token_id = alphabet.get_idx(mut_res)
+        wt_log_prob = log_probs[res_pos, wt_token_id].item()
+        mut_log_prob = log_probs[res_pos, mut_token_id].item()
+        score += mut_log_prob - wt_log_prob # higher means more stable
+
+    return score
+
+def stab_ddg_score(model, alphabet, fpath, chain_ids, mut, logger):
+    bound_score = naive_score(model, alphabet, fpath, chain_ids, mut, logger)
+    unbound_score_list = []
+    for chain_id in chain_ids:
+        unbound_score = naive_score(model, alphabet, fpath, [chain_id], mut, logger)
+        unbound_score_list.append(unbound_score)
+    final_score = bound_score - sum(unbound_score_list)
+
+    return final_score
+
 def get_args():
     parser = argparse.ArgumentParser(description='Zero-shot evaluation of ESM-IF')
     parser.add_argument('--logdir', type=str, default='logs/debug', help='Directory to save logs and results')
-    parser.add_argument('--input_csv', type=str, default='data/SKEMPI-v2/skempi_v2_ddg.csv', help='Path to input CSV file containing mutation data')
+    parser.add_argument('--input_csv', type=str, default='data/SKEMPI-processed/filtered_skempi_test.csv', help='Path to input CSV file containing mutation data')
     parser.add_argument('--output_csv', type=str, help='Path to output CSV file for results')
     parser.add_argument('--pdb_dir', type=str, default='data/SKEMPI-v2/PDBs', help='Directory containing PDB files')
     parser.add_argument('--model_name', type=str, default='esm_if1_gvp4_t16_142M_UR50', help='ESM-IF model name')
@@ -72,6 +117,8 @@ def get_args():
     parser.add_argument('--num_samples', type=int, default=1, help='Number of samples to average over for each mutation')
     parser.add_argument('--no_timestamp', action='store_true', help='Whether to omit timestamp from log directory name')
     parser.add_argument('--tag', type=str, default='', help='Additional tag to include in log directory name')
+    parser.add_argument('--sep', type=str, default=',', help='Separator used in the input CSV file')
+    parser.add_argument('--score_method', type=str, default='naive', choices=['naive', 'stab_ddg'], help='Scoring method to use for evaluating mutations')
     return parser.parse_args()
 
 def main():
@@ -81,6 +128,7 @@ def main():
 
     log_dir = commons.get_new_log_dir(args.logdir, prefix='zero_shot', tag=args.tag, timestamp=not args.no_timestamp)
     logger = commons.get_logger('ZeroShotESMIF', log_dir)
+    logger.info(f'args:\n{args}')
 
     # Load ESM-IF model
     model, alphabet = esm.pretrained.load_model_and_alphabet_hub(args.model_name)
@@ -90,7 +138,7 @@ def main():
 
 
     # load mutation data
-    df = pd.read_csv(args.input_csv, sep=';')
+    df = pd.read_csv(args.input_csv, sep=args.sep)
     # df = df.head(100) # for debugging
     pdb_mut_ddg = list(zip(df['#Pdb'], df['Mutation(s)_cleaned'], df['ddG']))
     pdb_chain_mut_ddg = []
@@ -113,37 +161,12 @@ def main():
             continue
 
         try:
-            structure = esm.inverse_folding.util.load_structure(fpath, chain_ids)
-            coords, native_seqs = esm.inverse_folding.multichain_util.extract_coords_from_complex(structure)
-            concat_coords, ranges = concatenate_coords(coords)
-            concat_seq = concatenate_seqs(native_seqs, alphabet, ranges)
-            logits = get_logits(model, alphabet, concat_coords, concat_seq)
-            # logger.info(f'{pdb} logits shape: {logits.shape}') # [1, 35, 347], batch_size x vocab_size x seq_len
-            logits = logits.permute(0, 2, 1) # [1, seq_len, vocab_size]
-            log_probs = F.log_softmax(logits, dim=-1) # [1, seq_len, vocab_size]
-            log_probs = log_probs.squeeze(0) # [seq_len, vocab_size]
-            # logger.info(f'{pdb} log_probs shape: {log_probs.shape}') # [seq_len, vocab_size]
-            # logger.info(ranges)
-            # logger.info(mut)
-            score = 0.0
-            for mut_str in mut:
-                wt_res = mut_str[0]
-                chain_id = mut_str[1]
-                res_id = int(mut_str[2:-1]) - 1 # convert to 0-based index
-                mut_res = mut_str[-1]
-                if chain_id not in ranges:
-                    logger.warning(f'Chain {chain_id} not found in {pdb}, skipping mutation {mut_str}')
-                    continue
-                start, end = ranges[chain_id]
-                res_pos = start + res_id
-                if res_pos < start or res_pos >= end:
-                    logger.warning(f'Residue position {res_id} out of range for chain {chain_id} in {pdb}, skipping mutation {mut_str}')
-                    continue
-                wt_token_id = alphabet.get_idx(wt_res)
-                mut_token_id = alphabet.get_idx(mut_res)
-                wt_log_prob = log_probs[res_pos, wt_token_id].item()
-                mut_log_prob = log_probs[res_pos, mut_token_id].item()
-                score += wt_log_prob - mut_log_prob # lower means better
+            if args.score_method == 'naive':
+                score = naive_score(model, alphabet, fpath, chain_ids, mut, logger)
+            elif args.score_method == 'stab_ddg':
+                score = stab_ddg_score(model, alphabet, fpath, chain_ids, mut, logger)
+            else:
+                raise ValueError(f"Unknown score method: {args.score_method}")
             # logger.info(f'{pdb_id} mutation score: {score:.4f}, ddG: {ddg:.4f}')
             predictions[i] = score
             # input()
@@ -167,12 +190,12 @@ def main():
     
     logger.info(f'Computed Spearman correlation for {len(correlation_list)} / {len(grouped)} PPIs')
     correlation_df = pd.DataFrame(correlation_list, columns=['#Pdb', 'Spearmanr'])
-    correlation_df.to_csv(os.path.join(log_dir, 'spearman_correlation.csv'), index=False, sep=';')
+    correlation_df.to_csv(os.path.join(log_dir, 'spearman_correlation.csv'), index=False, sep=args.sep)
     mean_sparman = correlation_df['Spearmanr'].mean()
     logger.info(f'Mean Spearman correlation across all PPIs: {mean_sparman:.4f}')
 
     args.output_csv = args.output_csv or os.path.join(log_dir, 'zero_shot_esmif_predictions.csv')
-    df.to_csv(args.output_csv, index=False, sep=';')
+    df.to_csv(args.output_csv, index=False, sep=args.sep)
 
 if __name__ == '__main__':
     main()
