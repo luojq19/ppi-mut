@@ -181,3 +181,4 @@ checkpoints/
 *.zip
 jupyters
 scripts/run.sh
+jobs.yml
