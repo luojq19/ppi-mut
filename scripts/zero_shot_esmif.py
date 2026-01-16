@@ -114,7 +114,7 @@ def get_args():
     parser.add_argument('--model_name', type=str, default='esm_if1_gvp4_t16_142M_UR50', help='ESM-IF model name')
     parser.add_argument('--device', type=str, default='cuda:0', help='Device to run the model on')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
-    parser.add_argument('--num_samples', type=int, default=1, help='Number of samples to average over for each mutation')
+    parser.add_argument('--num_repeats', type=int, default=1, help='Number of repeats to average over for each mutation')
     parser.add_argument('--no_timestamp', action='store_true', help='Whether to omit timestamp from log directory name')
     parser.add_argument('--tag', type=str, default='', help='Additional tag to include in log directory name')
     parser.add_argument('--sep', type=str, default=',', help='Separator used in the input CSV file')
@@ -159,14 +159,18 @@ def main():
         if not os.path.exists(fpath):
             logger.warning(f'PDB file not found: {fpath}, skipping {pdb_id}')
             continue
-
+        
+        score_list = []
         try:
-            if args.score_method == 'naive':
-                score = naive_score(model, alphabet, fpath, chain_ids, mut, logger)
-            elif args.score_method == 'stab_ddg':
-                score = stab_ddg_score(model, alphabet, fpath, chain_ids, mut, logger)
-            else:
-                raise ValueError(f"Unknown score method: {args.score_method}")
+            for repeat in range(args.num_repeats):
+                if args.score_method == 'naive':
+                    score_ = naive_score(model, alphabet, fpath, chain_ids, mut, logger)
+                elif args.score_method == 'stab_ddg':
+                    score_ = stab_ddg_score(model, alphabet, fpath, chain_ids, mut, logger)
+                else:
+                    raise ValueError(f"Unknown score method: {args.score_method}")
+                score_list.append(score_)
+            score = np.mean(score_list)
             # logger.info(f'{pdb_id} mutation score: {score:.4f}, ddG: {ddg:.4f}')
             predictions[i] = score
             # input()
