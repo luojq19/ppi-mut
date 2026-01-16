@@ -180,8 +180,9 @@ def main():
     # group by #Pdb, compute the spearman correlation between predicted_score and ddG inside each group, and log the results
     grouped = df.groupby('#Pdb')
     correlation_list = []
+    count_threshold = 10
     for pdb, group in grouped:
-        if len(group) > 1:
+        if len(group) > count_threshold:
             corr, _ = spearmanr(group['predicted_score'], group['ddG'])
             # logger.info(f'Spearman correlation for {pdb}: {corr:.4f}')
             correlation_list.append((pdb, corr))
@@ -192,7 +193,7 @@ def main():
     correlation_df = pd.DataFrame(correlation_list, columns=['#Pdb', 'Spearmanr'])
     correlation_df.to_csv(os.path.join(log_dir, 'spearman_correlation.csv'), index=False, sep=args.sep)
     mean_sparman = correlation_df['Spearmanr'].mean()
-    logger.info(f'Mean Spearman correlation across all PPIs: {mean_sparman:.4f}')
+    logger.info(f'Mean Spearman correlation across {len(correlation_list)} / {len(grouped)} PPIs: {mean_sparman:.4f}')
 
     args.output_csv = args.output_csv or os.path.join(log_dir, 'zero_shot_esmif_predictions.csv')
     df.to_csv(args.output_csv, index=False, sep=args.sep)
