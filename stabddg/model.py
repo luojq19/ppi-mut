@@ -63,9 +63,23 @@ class StaBddG(nn.Module):
         ddG = complex_ddG_fold - (binder1_ddG_fold + binder2_ddG_fold)
   
         return ddG
+    
+    def binding_ddG_naive(self, complex, binder1, binder2, complex_mut_seqs, binder1_mut_seqs, binder2_mut_seqs):
+        """ We calculate the binding ddG by only considering the folding ddG of the entire complex, without decomposing it into the individual binders.
+        """
+        complex_ddG_fold = self.folding_ddG(complex, complex_mut_seqs)
+        # binder1_ddG_fold = self.folding_ddG(binder1, binder1_mut_seqs)
+        # binder2_ddG_fold = self.folding_ddG(binder2, binder2_mut_seqs)
+        
+        ddG = complex_ddG_fold
+  
+        return ddG
 
-    def forward(self, complex, binder1, binder2, complex_mut_seqs, binder1_mut_seqs, binder2_mut_seqs):
-        return self.binding_ddG(complex, binder1, binder2, complex_mut_seqs, binder1_mut_seqs, binder2_mut_seqs)
+    def forward(self, complex, binder1, binder2, complex_mut_seqs, binder1_mut_seqs, binder2_mut_seqs, use_naive=False):
+        if use_naive:
+            return self.binding_ddG_naive(complex, binder1, binder2, complex_mut_seqs, binder1_mut_seqs, binder2_mut_seqs)
+        else:
+            return self.binding_ddG(complex, binder1, binder2, complex_mut_seqs, binder1_mut_seqs, binder2_mut_seqs)
     
     def _get_decoding_order(self, chain_M):
         """ Generate a random decoding order with the same shape as chain_M. """
