@@ -29,6 +29,7 @@ def get_args():
     parser.add_argument('--noise_level', type=float, default=0.1, help='Noise level for StaBddG model')
     parser.add_argument("--batch_size", type=int, default=10000, help="Number of tokens to process in a batch (not number of sequences, will be divided by sequence length to get number of sequences per batch)")
     parser.add_argument('--use_naive', action='store_true', help='Whether to use the naive scoring method instead of the antithetic variates method in StaBddG')
+    parser.add_argument('--use_antithetic_variates', type=int, default=1, help='Whether to use antithetic variates for variance reduction in StaBddG (1 for True, 0 for False)')
 
     return parser.parse_args()
 
@@ -63,7 +64,11 @@ def main():
     logger.info(f'Successfully loaded ProteinMPNN model at {args.ckpt_path}')
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
-    model = StaBddG(pmpnn=pmpnn, noise_level=args.noise_level, device=device)
+    model = StaBddG(pmpnn=pmpnn, 
+                    noise_level=args.noise_level, 
+                    device=device,
+                    use_antithetic_variates=bool(args.use_antithetic_variates),
+                    )
     model.to(device)
     model.eval()
     logger.info(f'Model: {model}')
@@ -142,6 +147,9 @@ def main():
     mean_spearman = correlation_df['Spearmanr'].mean()
     std_spearman = correlation_df['Spearmanr'].std()
     logger.info(f'Mean Spearman correlation across {len(correlation_list)} / {len(grouped)} PPIs: {mean_spearman:.4f} ± {std_spearman:.4f}')
+
+    end_overall = time.time()
+    logger.info(f'Time elapsed: {commons.sec2min_sec(end_overall - start_overall)}')
 
 if __name__ == '__main__':
     main()
